@@ -2859,13 +2859,17 @@ function MicPractice({ target }: { target: string }) {
   const [listening, setListening] = useState(false);
   const [result, setResult] = useState<{ transcript: string; score: number | null } | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const forceStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recRef = useRef<any>(null);
+  const settledRef = useRef(true);
+  const lastTranscriptRef = useRef("");
   const win = typeof window !== "undefined" ? (window as any) : null;
   const supported = !!(win && (win.SpeechRecognition || win.webkitSpeechRecognition));
 
   useEffect(() => {
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (forceStopRef.current) clearTimeout(forceStopRef.current);
       if (recRef.current) {
         try {
           recRef.current.abort();
@@ -2874,11 +2878,31 @@ function MicPractice({ target }: { target: string }) {
     };
   }, []);
 
-  const clearSafetyTimeout = () => {
+  const clearTimers = () => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
+    if (forceStopRef.current) {
+      clearTimeout(forceStopRef.current);
+      forceStopRef.current = null;
+    }
+  };
+
+  // Single source of truth for ending a recording attempt, no matter
+  // which path triggers it (final result, error, browser's own onend,
+  // or our own forced timeout). Guarded so it only ever runs once per
+  // attempt, however many of those paths happen to fire.
+  const finalize = () => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    clearTimers();
+    setListening(false);
+    recRef.current = null;
+    const transcript = lastTranscriptRef.current;
+    setResult(
+      transcript ? { transcript, score: scoreSimilarity(target, transcript) } : { transcript: "", score: null }
+    );
   };
 
   const start = () => {
@@ -2889,58 +2913,29 @@ function MicPractice({ target }: { target: string }) {
     rec.interimResults = true;
     rec.maxAlternatives = 1;
     rec.continuous = false;
-    let finalized = false;
-    let lastTranscript = "";
+    settledRef.current = false;
+    lastTranscriptRef.current = "";
     rec.onresult = (e: any) => {
       const last = e.results[e.results.length - 1];
-      lastTranscript = last[0].transcript;
-      if (last.isFinal) {
-        finalized = true;
-        setResult({ transcript: lastTranscript, score: scoreSimilarity(target, lastTranscript) });
-        clearSafetyTimeout();
-        setListening(false);
-        recRef.current = null;
-      }
+      lastTranscriptRef.current = last[0].transcript;
+      if (last.isFinal) finalize();
     };
-    rec.onerror = () => {
-      clearSafetyTimeout();
-      setListening(false);
-      recRef.current = null;
-    };
-    rec.onend = () => {
-      clearSafetyTimeout();
-      setListening(false);
-      recRef.current = null;
-      // If the browser never finalized a result (common when "stop" is
-      // tapped right as speech ends), fall back to whatever interim
-      // transcript we already captured instead of showing nothing.
-      if (!finalized) {
-        if (lastTranscript) {
-          setResult({ transcript: lastTranscript, score: scoreSimilarity(target, lastTranscript) });
-        } else {
-          setResult({ transcript: "", score: null });
-        }
-      }
-    };
+    rec.onerror = finalize;
+    rec.onend = finalize;
     setResult(null);
     setListening(true);
     recRef.current = rec;
-    // Safety net: some mobile browsers never fire onend/onerror if
-    // permission is silently blocked or recognition hangs — force-reset
-    // after 12s so the button never gets stuck in "listening" forever.
-    timeoutRef.current = setTimeout(() => {
-      setListening(false);
-      recRef.current = null;
-    }, 12000);
+    // Ultimate safety net: if the recognizer never even calls back at
+    // all (permission silently blocked, browser bug), don't leave the
+    // button locked forever.
+    timeoutRef.current = setTimeout(finalize, 15000);
     try {
       rec.start();
     } catch (err) {
       // start() can throw synchronously (e.g. "already started" on some
       // mobile browsers) — reset immediately instead of leaving the
       // button locked.
-      clearSafetyTimeout();
-      setListening(false);
-      recRef.current = null;
+      finalize();
     }
   };
 
@@ -2952,11 +2947,15 @@ function MicPractice({ target }: { target: string }) {
       try {
         recRef.current.stop();
       } catch (e) {
-        clearSafetyTimeout();
-        setListening(false);
-        recRef.current = null;
+        finalize();
       }
+    } else {
+      finalize();
     }
+    // Some mobile browsers silently swallow stop() and never fire
+    // onend/onerror afterward. Force the UI to resolve within ~2s of
+    // the tap regardless, using whatever transcript we already have.
+    forceStopRef.current = setTimeout(finalize, 2000);
   };
 
   if (!supported) return null;
