@@ -2857,7 +2857,7 @@ function scoreSimilarity(target, spoken) {
 
 function MicPractice({ target }: { target: string }) {
   const [listening, setListening] = useState(false);
-  const [result, setResult] = useState<{ transcript: string; score: number } | null>(null);
+  const [result, setResult] = useState<{ transcript: string; score: number | null } | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recRef = useRef<any>(null);
   const win = typeof window !== "undefined" ? (window as any) : null;
@@ -2886,15 +2886,21 @@ function MicPractice({ target }: { target: string }) {
     const SR = win.SpeechRecognition || win.webkitSpeechRecognition;
     const rec = new SR();
     rec.lang = "en-US";
-    rec.interimResults = false;
+    rec.interimResults = true;
     rec.maxAlternatives = 1;
     rec.continuous = false;
+    let finalized = false;
+    let lastTranscript = "";
     rec.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript;
-      setResult({ transcript, score: scoreSimilarity(target, transcript) });
-      clearSafetyTimeout();
-      setListening(false);
-      recRef.current = null;
+      const last = e.results[e.results.length - 1];
+      lastTranscript = last[0].transcript;
+      if (last.isFinal) {
+        finalized = true;
+        setResult({ transcript: lastTranscript, score: scoreSimilarity(target, lastTranscript) });
+        clearSafetyTimeout();
+        setListening(false);
+        recRef.current = null;
+      }
     };
     rec.onerror = () => {
       clearSafetyTimeout();
@@ -2905,6 +2911,16 @@ function MicPractice({ target }: { target: string }) {
       clearSafetyTimeout();
       setListening(false);
       recRef.current = null;
+      // If the browser never finalized a result (common when "stop" is
+      // tapped right as speech ends), fall back to whatever interim
+      // transcript we already captured instead of showing nothing.
+      if (!finalized) {
+        if (lastTranscript) {
+          setResult({ transcript: lastTranscript, score: scoreSimilarity(target, lastTranscript) });
+        } else {
+          setResult({ transcript: "", score: null });
+        }
+      }
     };
     setResult(null);
     setListening(true);
@@ -2961,23 +2977,29 @@ function MicPractice({ target }: { target: string }) {
       </button>
       {result && (
         <div className="mt-1.5 rounded-xl bg-violet-50 px-3 py-2 text-xs leading-relaxed text-violet-700">
-          你說的：「{result.transcript}」
-          <div className="mt-1 flex items-center gap-2">
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-violet-100">
-              <div
-                className="h-full rounded-full bg-violet-500 transition-all"
-                style={{ width: `${result.score}%` }}
-              />
-            </div>
-            <span className="shrink-0 font-semibold">{result.score}%</span>
-          </div>
-          <p className="mt-1 text-violet-500">
-            {result.score >= 80
-              ? "發音很準確，太棒了！"
-              : result.score >= 50
-              ? "不錯，再多念幾次會更流暢。"
-              : "再試一次，注意每個單字的發音。"}
-          </p>
+          {result.score === null ? (
+            <p>沒有聽到聲音，請確認麥克風權限，再點一次試試看！</p>
+          ) : (
+            <>
+              你說的：「{result.transcript}」
+              <div className="mt-1 flex items-center gap-2">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-violet-100">
+                  <div
+                    className="h-full rounded-full bg-violet-500 transition-all"
+                    style={{ width: `${result.score}%` }}
+                  />
+                </div>
+                <span className="shrink-0 font-semibold">{result.score}%</span>
+              </div>
+              <p className="mt-1 text-violet-500">
+                {result.score >= 80
+                  ? "發音很準確，太棒了！"
+                  : result.score >= 50
+                  ? "不錯，再多念幾次會更流暢。"
+                  : "再試一次，注意每個單字的發音。"}
+              </p>
+            </>
+          )}
         </div>
       )}
     </div>
