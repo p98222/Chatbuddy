@@ -3449,13 +3449,14 @@ export default function App() {
         <div className="border-t border-black/5 bg-[#FBF4E8] px-4 pb-6 pt-3">
           {!selected ? (
             <div className="flex flex-col gap-2">
-              {activeScenario.turns[turnIndex].options.map((opt, i) => (
+              {activeScenario.turns[turnIndex].options.map((opt: any, i: number) => (
                 <button
                   key={i}
                   onClick={() => chooseOption(opt)}
-                  className="rounded-2xl bg-white px-4 py-3 text-left text-sm text-slate-700 shadow-sm ring-1 ring-black/5 transition active:scale-[0.98]"
+                  className="flex items-start gap-2 rounded-2xl bg-white px-4 py-3 text-left text-sm text-slate-700 shadow-sm ring-1 ring-black/5 transition active:scale-[0.98]"
                 >
-                  {opt.text}
+                  <span className="flex-1">{opt.text}</span>
+                  <SpeakButton text={opt.text} className="mt-0.5" />
                 </button>
               ))}
             </div>
