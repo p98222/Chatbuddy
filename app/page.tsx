@@ -2855,11 +2855,25 @@ function scoreSimilarity(target, spoken) {
   return Math.round(f1 * 100);
 }
 
-function MicPractice({ target }) {
+function MicPractice({ target }: { target: string }) {
   const [listening, setListening] = useState(false);
   const [result, setResult] = useState<{ transcript: string; score: number } | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const win = typeof window !== "undefined" ? (window as any) : null;
   const supported = !!(win && (win.SpeechRecognition || win.webkitSpeechRecognition));
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const clearSafetyTimeout = () => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  };
 
   const start = () => {
     if (!supported || listening) return;
@@ -2871,12 +2885,32 @@ function MicPractice({ target }) {
     rec.onresult = (e: any) => {
       const transcript = e.results[0][0].transcript;
       setResult({ transcript, score: scoreSimilarity(target, transcript) });
+      clearSafetyTimeout();
+      setListening(false);
     };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
+    rec.onerror = () => {
+      clearSafetyTimeout();
+      setListening(false);
+    };
+    rec.onend = () => {
+      clearSafetyTimeout();
+      setListening(false);
+    };
     setResult(null);
     setListening(true);
-    rec.start();
+    // Safety net: some mobile browsers never fire onend/onerror if
+    // permission is silently blocked or recognition hangs — force-reset
+    // after 8s so the button never gets stuck in "listening" forever.
+    timeoutRef.current = setTimeout(() => setListening(false), 8000);
+    try {
+      rec.start();
+    } catch (err) {
+      // start() can throw synchronously (e.g. "already started" on some
+      // mobile browsers) — reset immediately instead of leaving the
+      // button locked.
+      clearSafetyTimeout();
+      setListening(false);
+    }
   };
 
   if (!supported) return null;
