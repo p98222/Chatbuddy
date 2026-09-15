@@ -2857,7 +2857,7 @@ function scoreSimilarity(target, spoken) {
 
 function MicPractice({ target }: { target: string }) {
   const [listening, setListening] = useState(false);
-  const [result, setResult] = useState<{ transcript: string; score: number | null } | null>(null);
+  const [result, setResult] = useState<{ transcript: string; score: number | null; reason?: string } | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const forceStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recRef = useRef<any>(null);
@@ -2893,20 +2893,35 @@ function MicPractice({ target }: { target: string }) {
   // which path triggers it (final result, error, browser's own onend,
   // or our own forced timeout). Guarded so it only ever runs once per
   // attempt, however many of those paths happen to fire.
-  const finalize = () => {
+  const finalize = (reason?: string) => {
     if (settledRef.current) return;
     settledRef.current = true;
     clearTimers();
     setListening(false);
     recRef.current = null;
     const transcript = lastTranscriptRef.current;
-    setResult(
-      transcript ? { transcript, score: scoreSimilarity(target, transcript) } : { transcript: "", score: null }
-    );
+    if (transcript) {
+      setResult({ transcript, score: scoreSimilarity(target, transcript) });
+    } else {
+      setResult({ transcript: "", score: null, reason: reason || "empty" });
+    }
   };
 
-  const start = () => {
+  const start = async () => {
     if (!supported || listening) return;
+    setResult(null);
+    // Explicitly ask for mic access first, rather than relying on
+    // SpeechRecognition's own implicit permission prompt — this is the
+    // standard, better-supported permission API and surfaces a clear
+    // "denied" reason on iOS Safari instead of a silent, confusing
+    // "heard nothing" result.
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+    } catch (err) {
+      setResult({ transcript: "", score: null, reason: "denied" });
+      return;
+    }
     const SR = win.SpeechRecognition || win.webkitSpeechRecognition;
     const rec = new SR();
     rec.lang = "en-US";
@@ -2920,15 +2935,14 @@ function MicPractice({ target }: { target: string }) {
       lastTranscriptRef.current = last[0].transcript;
       if (last.isFinal) finalize();
     };
-    rec.onerror = finalize;
-    rec.onend = finalize;
-    setResult(null);
+    rec.onerror = (e: any) => finalize(e && e.error === "not-allowed" ? "denied" : undefined);
+    rec.onend = () => finalize();
     setListening(true);
     recRef.current = rec;
     // Ultimate safety net: if the recognizer never even calls back at
     // all (permission silently blocked, browser bug), don't leave the
     // button locked forever.
-    timeoutRef.current = setTimeout(finalize, 15000);
+    timeoutRef.current = setTimeout(() => finalize(), 15000);
     try {
       rec.start();
     } catch (err) {
@@ -2977,7 +2991,11 @@ function MicPractice({ target }: { target: string }) {
       {result && (
         <div className="mt-1.5 rounded-xl bg-violet-50 px-3 py-2 text-xs leading-relaxed text-violet-700">
           {result.score === null ? (
-            <p>沒有聽到聲音，請確認麥克風權限，再點一次試試看！</p>
+            <p>
+              {result.reason === "denied"
+                ? "請允許麥克風權限才能使用這個功能。"
+                : "沒有聽到聲音，請確認麥克風權限，再點一次試試看！"}
+            </p>
           ) : (
             <>
               你說的：「{result.transcript}」
