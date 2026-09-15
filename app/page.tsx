@@ -2859,12 +2859,18 @@ function MicPractice({ target }: { target: string }) {
   const [listening, setListening] = useState(false);
   const [result, setResult] = useState<{ transcript: string; score: number } | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recRef = useRef<any>(null);
   const win = typeof window !== "undefined" ? (window as any) : null;
   const supported = !!(win && (win.SpeechRecognition || win.webkitSpeechRecognition));
 
   useEffect(() => {
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (recRef.current) {
+        try {
+          recRef.current.abort();
+        } catch (e) {}
+      }
     };
   }, []);
 
@@ -2882,26 +2888,34 @@ function MicPractice({ target }: { target: string }) {
     rec.lang = "en-US";
     rec.interimResults = false;
     rec.maxAlternatives = 1;
+    rec.continuous = false;
     rec.onresult = (e: any) => {
       const transcript = e.results[0][0].transcript;
       setResult({ transcript, score: scoreSimilarity(target, transcript) });
       clearSafetyTimeout();
       setListening(false);
+      recRef.current = null;
     };
     rec.onerror = () => {
       clearSafetyTimeout();
       setListening(false);
+      recRef.current = null;
     };
     rec.onend = () => {
       clearSafetyTimeout();
       setListening(false);
+      recRef.current = null;
     };
     setResult(null);
     setListening(true);
+    recRef.current = rec;
     // Safety net: some mobile browsers never fire onend/onerror if
     // permission is silently blocked or recognition hangs — force-reset
-    // after 8s so the button never gets stuck in "listening" forever.
-    timeoutRef.current = setTimeout(() => setListening(false), 8000);
+    // after 12s so the button never gets stuck in "listening" forever.
+    timeoutRef.current = setTimeout(() => {
+      setListening(false);
+      recRef.current = null;
+    }, 12000);
     try {
       rec.start();
     } catch (err) {
@@ -2910,6 +2924,22 @@ function MicPractice({ target }: { target: string }) {
       // button locked.
       clearSafetyTimeout();
       setListening(false);
+      recRef.current = null;
+    }
+  };
+
+  const stopManually = () => {
+    // Don't wait for the browser's own silence-detection — end the
+    // recording the moment the person taps again, which is far more
+    // reliable and faster than automatic cutoff on mobile browsers.
+    if (recRef.current) {
+      try {
+        recRef.current.stop();
+      } catch (e) {
+        clearSafetyTimeout();
+        setListening(false);
+        recRef.current = null;
+      }
     }
   };
 
@@ -2918,8 +2948,7 @@ function MicPractice({ target }: { target: string }) {
   return (
     <div className="mt-1.5 w-full max-w-[85%]">
       <button
-        onClick={start}
-        disabled={listening}
+        onClick={listening ? stopManually : start}
         className={
           "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition active:scale-95 " +
           (listening
@@ -2928,7 +2957,7 @@ function MicPractice({ target }: { target: string }) {
         }
       >
         <Mic size={13} className={listening ? "animate-pulse" : ""} />
-        {listening ? "聆聽中…請念出這句話" : "念念看，讓 AI 幫你打分"}
+        {listening ? "念完了？點一下結束" : "念念看，讓 AI 幫你打分"}
       </button>
       {result && (
         <div className="mt-1.5 rounded-xl bg-violet-50 px-3 py-2 text-xs leading-relaxed text-violet-700">
